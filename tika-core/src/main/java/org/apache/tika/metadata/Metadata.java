@@ -25,16 +25,26 @@ import java.text.DateFormat;
 import java.text.DateFormatSymbols;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.Enumeration;
-import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.TimeZone;
 
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+
+import org.apache.commons.lang.StringEscapeUtils;
 import org.apache.tika.metadata.Property.PropertyType;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
 /**
  * A multi-valued metadata container.
@@ -49,7 +59,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
     /**
      * A map of all metadata attributes.
      */
-    private Map<String, String[]> metadata = null;
+    private Document metadata = null;
 
     /**
      * The common delimiter used between the namespace abbreviation and the property name
@@ -88,6 +98,10 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
     public static final String TITLE = "title";
     /** @deprecated use TikaCoreProperties#TYPE */
     public static final String TYPE = "type";
+
+    private static final String DOM_NODE_NAME_ROOT = "metadata";
+    private static final String DOM_NODE_NAME_TOP_LEVEL_ELEMENT = "item";
+    private static final String DOM_ATTRIBUTE_NAME = "name";
 
     /**
      * Some parsers will have the date as a ISO-8601 string
@@ -151,7 +165,16 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * Constructs a new, empty metadata.
      */
     public Metadata() {
-        metadata = new HashMap<String, String[]>();
+        try {
+            DocumentBuilderFactory documentBuilderFactory = DocumentBuilderFactory.newInstance();
+            DocumentBuilder documentBuilder = documentBuilderFactory.newDocumentBuilder();
+            metadata = documentBuilder.newDocument();
+            // TODO namespace our root node
+            Node rootNode = metadata.createElement(DOM_NODE_NAME_ROOT);
+            metadata.appendChild(rootNode);
+        } catch (ParserConfigurationException e) {
+            throw new RuntimeException("Could not instantiate metadata store", e);
+        }
     }
 
     /**
@@ -162,7 +185,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * @return true is named value is multivalued, false if single value or null
      */
     public boolean isMultiValued(final Property property) {
-        return metadata.get(property.getName()) != null && metadata.get(property.getName()).length > 1;
+        return _getValues(property.getName()).length > 1;
     }
     
     /**
@@ -173,7 +196,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * @return true is named value is multivalued, false if single value or null
      */
     public boolean isMultiValued(final String name) {
-        return metadata.get(name) != null && metadata.get(name).length > 1;
+        return _getValues(name).length > 1;
     }
 
     /**
@@ -182,7 +205,100 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * @return Metadata names
      */
     public String[] names() {
-        return metadata.keySet().toArray(new String[metadata.keySet().size()]);
+        ArrayList<String> names = new ArrayList<String>();
+        NodeList list = metadata.getElementsByTagName(DOM_NODE_NAME_TOP_LEVEL_ELEMENT);
+        for (int i = 0; i < list.getLength(); i++) {
+            Node item = list.item(i);
+            String name = getAttribute(item, DOM_ATTRIBUTE_NAME);
+            if (!names.contains(name))
+            {
+                names.add(name);
+            }
+        }
+        return names.toArray(new String[names.size()]);
+    }
+    
+    /**
+     * Determines if the given node is a text node (vs element, etc.)
+     * 
+     * @param node
+     * @return true if node is a text node
+     */
+    protected boolean isTextNode(Node node) {
+        if (node != null && node.hasChildNodes() && node.getChildNodes().getLength() == 1)
+        {
+            Node childNode = node.getChildNodes().item(0);
+            return (childNode.getNodeType() == Node.TEXT_NODE);
+        }
+        return false;
+    }
+    
+    /**
+     * Gets the value of the given node (often the child text node)
+     * 
+     * @param node
+     * @return the node string value
+     */
+    protected String getNodeValue(Node node) {
+        if (node == null)
+        {
+            return null;
+        }
+        String value = node.getNodeValue();
+        if (value == null && isTextNode(node))
+        {
+            value = node.getChildNodes().item(0).getNodeValue();
+        }
+        if (value != null)
+        {
+            value = unescapeNodeValue(value);
+        }
+        return value;
+    }
+    
+    /**
+     * Escapes the given value (for valid XML)
+     * 
+     * @param value
+     * @return the escaped value
+     */
+    protected String escapeNodeValue(String value) {
+        if (value == null) {
+            return null;
+        }
+        return StringEscapeUtils.escapeXml(value);
+    }
+    
+    /**
+     * Unescapes the given value (from XML-escaped)
+     * 
+     * @param value
+     * @return the unescpaed value
+     */
+    protected String unescapeNodeValue(String value) {
+        if (value == null) {
+            return null;
+        }
+        return StringEscapeUtils.unescapeXml(value);
+    }
+    
+    /**
+     * Gets the given attribute value from the given node
+     * 
+     * @param node
+     * @param attribute
+     * @return the attribute value
+     */
+    protected String getAttribute(Node node, String attribute) {
+        if (node == null || attribute == null || !node.hasAttributes()) {
+            return null;
+        }
+        // TODO namespacing
+        Node attributeNode = node.getAttributes().getNamedItem(attribute);
+        if (attributeNode == null) {
+            return null;
+        }
+        return attributeNode.getNodeValue();
     }
 
     /**
@@ -194,11 +310,23 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * @return the value associated to the specified metadata name.
      */
     public String get(final String name) {
-        String[] values = metadata.get(name);
-        if (values == null) {
+        Node foundNode = null;
+        NodeList list = metadata.getElementsByTagName(DOM_NODE_NAME_TOP_LEVEL_ELEMENT);
+        if (list == null) {
+            return null;
+        }
+        for (int i = 0; i < list.getLength(); i++) {
+            String metadataName = getAttribute(list.item(i), DOM_ATTRIBUTE_NAME);
+            if (name.equals(metadataName)) {
+                foundNode = list.item(i);
+                break;
+            }
+        }
+        
+        if (foundNode == null) {
             return null;
         } else {
-            return values[0];
+            return getNodeValue(foundNode);
         }
     }
 
@@ -285,20 +413,21 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
     }
 
     private String[] _getValues(final String name) {
-        String[] values = metadata.get(name);
-        if (values == null) {
-            values = new String[0];
+        ArrayList<String> values = new ArrayList<String>();
+        NodeList list = metadata.getElementsByTagName(DOM_NODE_NAME_TOP_LEVEL_ELEMENT);
+        for (int i = 0; i < list.getLength(); i++) {
+            String metadataName = getAttribute(list.item(i), DOM_ATTRIBUTE_NAME);
+            if (name.equals(metadataName)) {
+                String value = getNodeValue(list.item(i));
+                if (value != null)
+                {
+                    values.add(value);
+                }
+            }
         }
-        return values;
+        return values.toArray(new String[values.size()]);
     }
     
-    private String[] appendedValues(String[] values, final String value) {
-        String[] newValues = new String[values.length + 1];
-        System.arraycopy(values, 0, newValues, 0, values.length);
-        newValues[newValues.length - 1] = value;
-        return newValues;
-    }
-
     /**
      * Add a metadata name/value mapping. Add the specified value to the list of
      * values associated to the specified metadata name.
@@ -309,12 +438,14 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      *          the metadata value.
      */
     public void add(final String name, final String value) {
-        String[] values = metadata.get(name);
-        if (values == null) {
-            set(name, value);
-        } else {
-            metadata.put(name, appendedValues(values, value));
+        if (name == null || value == null) {
+            return;
         }
+        Element element = metadata.createElement(DOM_NODE_NAME_TOP_LEVEL_ELEMENT);
+        // TODO namespacing
+        element.setAttribute(DOM_ATTRIBUTE_NAME, name);
+        element.appendChild(metadata.createTextNode(escapeNodeValue(value)));
+        metadata.getFirstChild().appendChild(element);
     }
     
     /**
@@ -327,15 +458,29 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      *          the metadata value.
      */
     public void add(final Property property, final String value) {
-        String[] values = metadata.get(property.getName());
-        if (values == null) {
-            set(property, value);
+        if (property == null || value == null)
+        {
+            return;
+        }
+        if (property.getPropertyType() == PropertyType.COMPOSITE) {
+            add(property.getPrimaryProperty(), value);
+            if (property.getSecondaryExtractProperties() != null) {
+                for (Property secondaryExtractProperty : property.getSecondaryExtractProperties()) {
+                    try {
+                        add(secondaryExtractProperty, value);
+                    } catch (PropertyTypeException e) {
+                        // TODO this is only to mimic current behavior, is it what we want?
+                        set(secondaryExtractProperty.getName(), value);
+                    }
+                }
+            }
         } else {
-             if (property.isMultiValuePermitted()) {
-                 set(property, appendedValues(values, value));
-             } else {
-                 throw new PropertyTypeException(property.getPropertyType());
-             }
+            String currentValue = get(property);
+            if (!property.isMultiValuePermitted() && currentValue != null)
+            {
+                throw new PropertyTypeException(property.getPropertyType());
+            }
+            add(property.getName(), value);
         }
     }
 
@@ -351,7 +496,8 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
             (Enumeration<String>) properties.propertyNames();
         while (names.hasMoreElements()) {
             String name = names.nextElement();
-            metadata.put(name, new String[] { properties.getProperty(name) });
+            String value = properties.getProperty(name);
+            set(name, value);
         }
     }
 
@@ -365,10 +511,9 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * @param value  the metadata value, or <code>null</code>
      */
     public void set(String name, String value) {
+        remove(name);
         if (value != null) {
-            metadata.put(name, new String[] { value });
-        } else {
-            metadata.remove(name);
+            add(name, value);
         }
     }
 
@@ -414,7 +559,9 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
                 }
             }
         } else {
-            metadata.put(property.getName(), values);
+            for (int i = 0; i < values.length; i++) {
+                add(property, values[i]);
+            }
         }
     }
 
@@ -502,7 +649,18 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      *          metadata name to remove
      */
     public void remove(String name) {
-        metadata.remove(name);
+        NodeList list = metadata.getElementsByTagName(DOM_NODE_NAME_TOP_LEVEL_ELEMENT);
+        Set<Node> toRemove = new HashSet<Node>();
+        int found = list.getLength();
+        for (int i = 0; i < found; i++) {
+            Node item = list.item(i);
+            if (name.equals(getAttribute(item, DOM_ATTRIBUTE_NAME))) {
+                toRemove.add(item);
+            }
+        }
+        for (Node node : toRemove) {
+            node.getParentNode().removeChild(node);
+        }
     }
 
     /**
@@ -511,7 +669,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * @return number of metadata names
      */
     public int size() {
-        return metadata.size();
+        return names().length;
     }
 
     public boolean equals(Object o) {
@@ -548,12 +706,42 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
     }
 
     public String toString() {
-        StringBuffer buf = new StringBuffer();
-        String[] names = names();
-        for (int i = 0; i < names.length; i++) {
-            String[] values = _getValues(names[i]);
-            for (int j = 0; j < values.length; j++) {
-                buf.append(names[i]).append("=").append(values[j]).append(" ");
+        Node parent = metadata.getFirstChild();
+        return toString(parent, 0);
+    }
+    
+    protected String toString(Node node, int indent) {
+        if (node.getNodeType() == Node.TEXT_NODE) {
+            return null;
+        }
+        StringBuffer buf = new StringBuffer("");
+        for (int i = 0; i < indent; i++) {
+            buf.append("\t");
+        }
+        String value = node.getNodeValue();
+        if (value == null) {
+            NodeList children = node.getChildNodes();
+            if (children != null && children.getLength() == 1)
+            {
+                value = children.item(0).getNodeValue();
+            }
+        }
+        buf.append("{")
+                .append("type:" + node.getNodeType())
+                .append(", namespace:" + node.getNamespaceURI())
+                .append(", prefix:" + node.getPrefix())
+                .append(", nodeName:" + node.getNodeName())
+                .append(", name:\"" + getAttribute(node, DOM_ATTRIBUTE_NAME) + "\"")
+                .append(", textValue:\"" + value +"\"")
+                .append("}");
+        if (node.hasChildNodes()) {
+            NodeList list = node.getChildNodes();
+            for (int i=0; i < list.getLength(); i++) {
+                Node child = list.item(i);
+                String nodeOutput = toString(child, indent + 1);
+                if (nodeOutput != null) {
+                    buf.append("\n").append(nodeOutput);
+                }
             }
         }
         return buf.toString();
