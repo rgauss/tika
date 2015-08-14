@@ -25,6 +25,8 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
+import javax.xml.namespace.QName;
+
 /**
  * XMP property definition. Each instance of this class defines a single
  * metadata property like "dc:format". In addition to the property name,
@@ -55,10 +57,10 @@ public final class Property implements Comparable<Property> {
         MIME_TYPE, PROPER_NAME, RATIONAL, REAL, TEXT, URI, URL, XPATH, PROPERTY
     }
 
-    private static final Map<String, Property> properties =
-            new HashMap<String, Property>();
+    private static final Map<QName, Property> properties =
+            new HashMap<QName, Property>();
 
-    private final String name;
+    private final QName qName;
 
     private final boolean internal;
 
@@ -76,9 +78,9 @@ public final class Property implements Comparable<Property> {
     private final Set<String> choices;
 
     private Property(
-            String name, boolean internal, PropertyType propertyType,
+            QName qName, boolean internal, PropertyType propertyType,
             ValueType valueType, String[] choices, Property primaryProperty, Property[] secondaryExtractProperties) {
-        this.name = name;
+        this.qName = qName;
         this.internal = internal;
         this.propertyType = propertyType;
         this.valueType = valueType;
@@ -98,9 +100,21 @@ public final class Property implements Comparable<Property> {
             
             // Only store primary properties for lookup, not composites
             synchronized (properties) {
-               properties.put(name, this);
+               properties.put(qName, this);
            }
         }
+    }
+
+    private Property(
+            String name, boolean internal, PropertyType propertyType,
+            ValueType valueType, String[] choices, Property primaryProperty, Property[] secondaryExtractProperties) {
+        this(Metadata.convertToQName(name), internal, propertyType, valueType, choices, null, null);
+    }
+
+    private Property(
+            QName qName, boolean internal, PropertyType propertyType,
+            ValueType valueType, String[] choices) {
+        this(qName, internal, propertyType, valueType, choices, null, null);
     }
     
     private Property(
@@ -110,9 +124,19 @@ public final class Property implements Comparable<Property> {
     }
 
     private Property(
+            QName qName, boolean internal,
+            ValueType valueType, String[] choices) {
+        this(qName, internal, PropertyType.SIMPLE, valueType, choices);
+    }
+    
+    private Property(
             String name, boolean internal,
             ValueType valueType, String[] choices) {
         this(name, internal, PropertyType.SIMPLE, valueType, choices);
+    }
+
+    private Property(QName qName, boolean internal, ValueType valueType) {
+        this(qName, internal, PropertyType.SIMPLE, valueType, null);
     }
 
     private Property(String name, boolean internal, ValueType valueType) {
@@ -120,13 +144,31 @@ public final class Property implements Comparable<Property> {
     }
 
     private Property(
+            QName qName, boolean internal,
+            PropertyType propertyType, ValueType valueType) {
+        this(qName, internal, propertyType, valueType, null);
+    }
+    
+    private Property(
             String name, boolean internal,
             PropertyType propertyType, ValueType valueType) {
         this(name, internal, propertyType, valueType, null);
     }
     
+    /**
+     * Gets the shorthand namespacePrefix and localName.
+     * The more specific QName should be used instead.
+     * 
+     * @return the property name
+     * @see {@link #getQName()}
+     */
+    // TODO deprecate?
     public String getName() {
-        return name;
+        return Metadata.getQualifiedName(qName);
+    }
+
+    public QName getQName() {
+        return qName;
     }
 
     public boolean isInternal() {
@@ -158,7 +200,7 @@ public final class Property implements Comparable<Property> {
      */
     public static PropertyType getPropertyType(String key) {
         PropertyType type = null;
-        Property prop = properties.get(key);
+        Property prop = properties.get(Metadata.convertToQName(key));
         if (prop != null) {
             type = prop.getPropertyType();
         }
@@ -171,7 +213,22 @@ public final class Property implements Comparable<Property> {
      * @return the Property object
      */
     public static Property get(String key) {
-        return properties.get(key);
+        QName qNameKey = Metadata.convertToQName(key);
+        Property foundProperty = null;
+        // First check for existing, namespaced property as QName equals does not examine prefix
+        if (key.contains(Metadata.NAMESPACE_PREFIX_DELIMITER)) {
+            for (QName qName : properties.keySet()) {
+                if (qName.getPrefix().equals(qNameKey.getPrefix()) 
+                        && qName.getLocalPart().equals(qNameKey.getLocalPart())) {
+                    foundProperty = properties.get(qName);
+                }
+            }
+        }
+        // If no namespaced property found look for local name
+        if (foundProperty == null) {
+            foundProperty = properties.get(qNameKey);
+        }
+        return foundProperty;
     }
 
     public PropertyType getPropertyType() {
@@ -213,10 +270,12 @@ public final class Property implements Comparable<Property> {
     
     public static SortedSet<Property> getProperties(String prefix) {
         SortedSet<Property> set = new TreeSet<Property>();
-        String p = prefix + ":";
+        if (prefix == null) {
+            return set;
+        }
         synchronized (properties) {
-            for (String name : properties.keySet()) {
-                if (name.startsWith(p)) {
+            for (QName name : properties.keySet()) {
+                if (prefix.equals(name.getPrefix())) {
                     set.add(properties.get(name));
                 }
             }
@@ -224,8 +283,17 @@ public final class Property implements Comparable<Property> {
         return set;
     }
 
+    public static Property internalBoolean(QName qName) {
+        return new Property(qName, true, ValueType.BOOLEAN);
+    }
+
     public static Property internalBoolean(String name) {
         return new Property(name, true, ValueType.BOOLEAN);
+    }
+
+    public static Property internalClosedChoise(
+            QName qName, String... choices) {
+        return new Property(qName, true, ValueType.CLOSED_CHOICE, choices);
     }
 
     public static Property internalClosedChoise(
@@ -233,16 +301,32 @@ public final class Property implements Comparable<Property> {
         return new Property(name, true, ValueType.CLOSED_CHOICE, choices);
     }
 
+    public static Property internalDate(QName qName) {
+        return new Property(qName, true, ValueType.DATE);
+    }
+    
     public static Property internalDate(String name) {
         return new Property(name, true, ValueType.DATE);
+    }
+
+    public static Property internalInteger(QName qName) {
+        return new Property(qName, true, ValueType.INTEGER);
     }
 
     public static Property internalInteger(String name) {
         return new Property(name, true, ValueType.INTEGER);
     }
 
+    public static Property internalIntegerSequence(QName qName) {
+        return new Property(qName, true, PropertyType.SEQ, ValueType.INTEGER);
+    }
+
     public static Property internalIntegerSequence(String name) {
         return new Property(name, true, PropertyType.SEQ, ValueType.INTEGER);
+    }
+
+    public static Property internalRational(QName qName) {
+        return new Property(qName, true, ValueType.RATIONAL);
     }
 
     public static Property internalRational(String name) {
@@ -250,23 +334,50 @@ public final class Property implements Comparable<Property> {
     }
 
     public static Property internalOpenChoise(
+            QName qName, String... choices) {
+        return new Property(qName, true, ValueType.OPEN_CHOICE, choices);
+    }
+
+    public static Property internalOpenChoise(
             String name, String... choices) {
         return new Property(name, true, ValueType.OPEN_CHOICE, choices);
     }
+
+    public static Property internalReal(QName qName) {
+        return new Property(qName, true, ValueType.REAL);
+    }
+
     public static Property internalReal(String name) {
         return new Property(name, true, ValueType.REAL);
     }
 
+    public static Property internalText(QName qName) {
+        return new Property(qName, true, ValueType.TEXT);
+    }
+    
     public static Property internalText(String name) {
         return new Property(name, true, ValueType.TEXT);
+    }
+    
+    public static Property internalTextBag(QName qName) {
+        return new Property(qName, true, PropertyType.BAG, ValueType.TEXT);
     }
     
     public static Property internalTextBag(String name) {
         return new Property(name, true, PropertyType.BAG, ValueType.TEXT);
     }
 
+    public static Property internalURI(QName qName) {
+        return new Property(qName, true, ValueType.URI);
+    }
+
     public static Property internalURI(String name) {
         return new Property(name, true, ValueType.URI);
+    }
+
+    public static Property externalClosedChoise(
+            QName qName, String... choices) {
+        return new Property(qName, false, ValueType.CLOSED_CHOICE, choices);
     }
 
     public static Property externalClosedChoise(
@@ -275,28 +386,57 @@ public final class Property implements Comparable<Property> {
     }
 
     public static Property externalOpenChoise(
+            QName qName, String... choices) {
+        return new Property(qName, false, ValueType.OPEN_CHOICE, choices);
+    }
+
+    public static Property externalOpenChoise(
             String name, String... choices) {
         return new Property(name, false, ValueType.OPEN_CHOICE, choices);
+    }
+
+    public static Property externalDate(QName qName) {
+        return new Property(qName, false, ValueType.DATE);
     }
 
     public static Property externalDate(String name) {
         return new Property(name, false, ValueType.DATE);
     }
 
+    public static Property externalReal(QName qName) {
+        return new Property(qName, false, ValueType.REAL);
+    }
+
     public static Property externalReal(String name) {
        return new Property(name, false, ValueType.REAL);
    }
+
+    public static Property externalInteger(QName qName) {
+        return new Property(qName, false, ValueType.INTEGER);
+    }
 
     public static Property externalInteger(String name) {
         return new Property(name, false, ValueType.INTEGER);
     }
 
+    public static Property externalBoolean(QName qName) {
+        return new Property(qName, false, ValueType.BOOLEAN);
+    }
+
     public static Property externalBoolean(String name) {
        return new Property(name, false, ValueType.BOOLEAN);
-   }
+    }
+
+    public static Property externalText(QName qName) {
+        return new Property(qName, false, ValueType.TEXT);
+    }
 
     public static Property externalText(String name) {
         return new Property(name, false, ValueType.TEXT);
+    }
+
+    public static Property externalTextBag(QName qName) {
+        return new Property(qName, false, PropertyType.BAG, ValueType.TEXT);
     }
 
     public static Property externalTextBag(String name) {
@@ -332,7 +472,7 @@ public final class Property implements Comparable<Property> {
             choices = primaryProperty.getChoices().toArray(
                     new String[primaryProperty.getChoices().size()]);
         }
-        return new Property(primaryProperty.getName(),
+        return new Property(primaryProperty.getQName(),
                 primaryProperty.isInternal(), PropertyType.COMPOSITE,
                 ValueType.PROPERTY, choices, primaryProperty,
                 secondaryExtractProperties);
@@ -341,17 +481,19 @@ public final class Property implements Comparable<Property> {
     //----------------------------------------------------------< Comparable >
 
     public int compareTo(Property o) {
-        return name.compareTo(o.name);
+        return qName.toString().compareTo(o.qName.toString());
     }
 
     //--------------------------------------------------------------< Object >
 
     public boolean equals(Object o) {
-        return o instanceof Property && name.equals(((Property) o).name);
+        return o instanceof Property
+                && qName.equals(((Property) o).qName) 
+                && propertyType.equals(((Property) o).propertyType);
     }
 
     public int hashCode() {
-        return name.hashCode();
+        return qName.hashCode();
     }
 
 }

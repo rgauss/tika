@@ -21,6 +21,7 @@ import static org.apache.tika.utils.DateUtils.UTC;
 import static org.apache.tika.utils.DateUtils.formatDate;
 
 import java.io.Serializable;
+import java.io.StringWriter;
 import java.text.DateFormat;
 import java.text.DateFormatSymbols;
 import java.text.ParseException;
@@ -29,15 +30,23 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.Enumeration;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.Set;
 import java.util.TimeZone;
 
+import javax.xml.XMLConstants;
+import javax.xml.namespace.QName;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.transform.OutputKeys;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerException;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
 
 import org.apache.commons.lang.StringEscapeUtils;
 import org.apache.tika.metadata.Property.PropertyType;
@@ -99,8 +108,10 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
     /** @deprecated use TikaCoreProperties#TYPE */
     public static final String TYPE = "type";
 
-    private static final String DOM_NODE_NAME_ROOT = "metadata";
-    private static final String DOM_NODE_NAME_TOP_LEVEL_ELEMENT = "item";
+    private static final String DOM_TIKA_NAMESPACE = "http://tika.apache.org/";
+    private static final String DOM_TIKA_NAMESPACE_PREFIX = "tika";
+    private static final String DOM_NODE_ROOT_LOCAL_NAME = "metadata";
+    private static final String DOM_NODE_ENTRY_LOCAL_NAME = "entry";
     private static final String DOM_ATTRIBUTE_NAME = "name";
 
     /**
@@ -160,6 +171,29 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
         }
         return null;
     }
+    
+    /**
+     * Converts the given simple name to a QName with no namespaceURI.
+     * <p>
+     * If the name contains a single ":" delimiter then the first part
+     * is used as as the prefix and the second as the localPart.
+     * 
+     * @param name
+     * @return the converted QName
+     */
+    protected static QName convertToQName(String name) {
+        if (name == null) {
+            return null;
+        }
+        String namespacePrefix = XMLConstants.DEFAULT_NS_PREFIX;
+        String localName = name;
+        if (name.contains(Metadata.NAMESPACE_PREFIX_DELIMITER) 
+                && name.split(Metadata.NAMESPACE_PREFIX_DELIMITER).length == 2) {
+            namespacePrefix = name.split(Metadata.NAMESPACE_PREFIX_DELIMITER)[0];
+            localName = name.split(Metadata.NAMESPACE_PREFIX_DELIMITER)[1];
+        }
+        return new QName(null, localName, namespacePrefix);
+    }
 
     /**
      * Constructs a new, empty metadata.
@@ -169,8 +203,9 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
             DocumentBuilderFactory documentBuilderFactory = DocumentBuilderFactory.newInstance();
             DocumentBuilder documentBuilder = documentBuilderFactory.newDocumentBuilder();
             metadata = documentBuilder.newDocument();
-            // TODO namespace our root node
-            Node rootNode = metadata.createElement(DOM_NODE_NAME_ROOT);
+            Node rootNode = metadata.createElementNS(
+                    DOM_TIKA_NAMESPACE, 
+                    DOM_TIKA_NAMESPACE_PREFIX + NAMESPACE_PREFIX_DELIMITER + DOM_NODE_ROOT_LOCAL_NAME);
             metadata.appendChild(rootNode);
         } catch (ParserConfigurationException e) {
             throw new RuntimeException("Could not instantiate metadata store", e);
@@ -185,7 +220,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * @return true is named value is multivalued, false if single value or null
      */
     public boolean isMultiValued(final Property property) {
-        return _getValues(property.getName()).length > 1;
+        return getValues(property.getQName()).length > 1;
     }
     
     /**
@@ -196,7 +231,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * @return true is named value is multivalued, false if single value or null
      */
     public boolean isMultiValued(final String name) {
-        return _getValues(name).length > 1;
+        return getValues(convertToQName(name)).length > 1;
     }
 
     /**
@@ -206,13 +241,25 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      */
     public String[] names() {
         ArrayList<String> names = new ArrayList<String>();
-        NodeList list = metadata.getElementsByTagName(DOM_NODE_NAME_TOP_LEVEL_ELEMENT);
+        NodeList rootList = metadata.getElementsByTagNameNS(
+                DOM_TIKA_NAMESPACE, DOM_NODE_ROOT_LOCAL_NAME);
+        if (rootList == null || rootList.getLength() == 0) {
+            // TODO Could not find root node, throw error instead?
+            return new String[] {};
+        }
+        if (rootList.getLength() > 1) {
+            // TODO Found more than one root node, throw error?
+        }
+        Node rootNode = rootList.item(0);
+        NodeList list = rootNode.getChildNodes();
         for (int i = 0; i < list.getLength(); i++) {
             Node item = list.item(i);
-            String name = getAttribute(item, DOM_ATTRIBUTE_NAME);
-            if (!names.contains(name))
-            {
-                names.add(name);
+            if (item.getNodeType() != Node.TEXT_NODE) {
+                String name = getMetadataName(item);
+                if (!names.contains(name))
+                {
+                    names.add(name);
+                }
             }
         }
         return names.toArray(new String[names.size()]);
@@ -231,6 +278,37 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
             return (childNode.getNodeType() == Node.TEXT_NODE);
         }
         return false;
+    }
+    
+    /**
+     * Determines if the given QName has a non-null namespace URI.
+     * 
+     * @param qName
+     * @return true if the QName is namespaced
+     */
+    protected static boolean isNamespaced(QName qName) {
+        if (qName == null) {
+            return false;
+        }
+        return !qName.getNamespaceURI().equals(XMLConstants.NULL_NS_URI);
+    }
+    
+    /**
+     * Gets the qualified name (prefix:localPart) for the given
+     * QName.
+     * 
+     * @param qName
+     * @return the qualified name
+     */
+    protected static String getQualifiedName(QName qName) {
+        if (qName == null) {
+            return null;
+        }
+        StringBuffer name = new StringBuffer("");
+        if (!qName.getPrefix().equals(XMLConstants.DEFAULT_NS_PREFIX)) {
+            name.append(qName.getPrefix()).append(NAMESPACE_PREFIX_DELIMITER);
+        }
+        return name.append(qName.getLocalPart()).toString();
     }
     
     /**
@@ -283,22 +361,29 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
     }
     
     /**
-     * Gets the given attribute value from the given node
+     * Gets the metadata name attribute value from the given node
      * 
      * @param node
-     * @param attribute
      * @return the attribute value
      */
-    protected String getAttribute(Node node, String attribute) {
-        if (node == null || attribute == null || !node.hasAttributes()) {
+    protected String getMetadataName(Node node) {
+        if (node == null) {
             return null;
         }
-        // TODO namespacing
-        Node attributeNode = node.getAttributes().getNamedItem(attribute);
-        if (attributeNode == null) {
-            return null;
+        if (node.getNodeName().equals(DOM_TIKA_NAMESPACE_PREFIX + NAMESPACE_PREFIX_DELIMITER + DOM_NODE_ENTRY_LOCAL_NAME)) {
+            if (!node.hasAttributes()) {
+                return null;
+            }
+            Node attributeNode = 
+                    node.getAttributes().getNamedItem(
+                            DOM_TIKA_NAMESPACE_PREFIX + NAMESPACE_PREFIX_DELIMITER + DOM_ATTRIBUTE_NAME);
+            if (attributeNode == null) {
+                return null;
+            }
+            return attributeNode.getNodeValue();
+        } else {
+            return node.getNodeName();
         }
-        return attributeNode.getNodeValue();
     }
 
     /**
@@ -310,24 +395,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * @return the value associated to the specified metadata name.
      */
     public String get(final String name) {
-        Node foundNode = null;
-        NodeList list = metadata.getElementsByTagName(DOM_NODE_NAME_TOP_LEVEL_ELEMENT);
-        if (list == null) {
-            return null;
-        }
-        for (int i = 0; i < list.getLength(); i++) {
-            String metadataName = getAttribute(list.item(i), DOM_ATTRIBUTE_NAME);
-            if (name.equals(metadataName)) {
-                foundNode = list.item(i);
-                break;
-            }
-        }
-        
-        if (foundNode == null) {
-            return null;
-        } else {
-            return getNodeValue(foundNode);
-        }
+        return getValue(convertToQName(name));
     }
 
     /**
@@ -338,7 +406,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * @return property value, or <code>null</code> if the property is not set
      */
     public String get(Property property) {
-        return get(property.getName());
+        return getValue(property.getQName());
     }
     
     /**
@@ -398,7 +466,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * @return the values associated to a metadata name.
      */
     public String[] getValues(final Property property) {
-        return _getValues(property.getName());
+        return getValues(property.getQName());
     }
 
     /**
@@ -409,23 +477,160 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * @return the values associated to a metadata name.
      */
     public String[] getValues(final String name) {
-        return _getValues(name);
+        return getValues(convertToQName(name));
+    }
+    
+    /**
+     * Converts the given QName into an appropriate QName
+     * that may be contained in the metadata store.
+     * <p>
+     * If the given QName has a namespace URI it is simply passed through.
+     * <p>
+     * If the given QName has no namespace URI but does have a prefix, 
+     * a corresponding known, namespaced property is looked for.
+     * <p>
+     * If no known, namespaced property is found the given QName is converted
+     * to a "tika-entry" QName.
+     * 
+     * @param qName
+     * @return the converted QName for the metadata store
+     */
+    private QName getLookupQName(final QName qName) {
+        if (!isNamespaced(qName)) {
+            String lookupNamespaceURI = null;
+            String lookupLocalPart = null;
+            String lookupPrefix = null;
+            Property knownProperty = Property.get(getQualifiedName(qName));
+            if (knownProperty != null 
+                    && !knownProperty.getQName().getNamespaceURI().equals(XMLConstants.NULL_NS_URI)) {
+                lookupNamespaceURI = knownProperty.getQName().getNamespaceURI();
+                lookupLocalPart = knownProperty.getQName().getLocalPart();
+                lookupPrefix = knownProperty.getQName().getPrefix();
+            } else {
+                lookupNamespaceURI = DOM_TIKA_NAMESPACE;
+                lookupLocalPart = DOM_NODE_ENTRY_LOCAL_NAME;
+                lookupPrefix = DOM_TIKA_NAMESPACE_PREFIX;
+            }
+            return new QName(lookupNamespaceURI, lookupLocalPart, lookupPrefix);
+        } else {
+            return qName;
+        }
     }
 
-    private String[] _getValues(final String name) {
-        ArrayList<String> values = new ArrayList<String>();
-        NodeList list = metadata.getElementsByTagName(DOM_NODE_NAME_TOP_LEVEL_ELEMENT);
+    /**
+     * Gets elements in the metadata document corresponding to the
+     * given QName, size constrained by the given limit.
+     * <p>
+     * Uses {@link #getLookupQName(QName)} to convert the given QName
+     * and inspects tike-entry tika-name attributes where needed.
+     * 
+     * @param qName
+     * @param limit
+     * @return the found DOM nodes
+     */
+    private Set<Node> findNodes(final QName qName, int limit) {
+        Set<Node> foundNodes = new LinkedHashSet<Node>();
+        if (qName == null) {
+            return foundNodes;
+        }
+        
+        QName lookupQName = getLookupQName(qName);
+        NodeList list = metadata.getElementsByTagNameNS(
+                lookupQName.getNamespaceURI(), lookupQName.getLocalPart());
         for (int i = 0; i < list.getLength(); i++) {
-            String metadataName = getAttribute(list.item(i), DOM_ATTRIBUTE_NAME);
-            if (name.equals(metadataName)) {
-                String value = getNodeValue(list.item(i));
-                if (value != null)
-                {
-                    values.add(value);
+            if (lookupQName.getLocalPart().equals(DOM_NODE_ENTRY_LOCAL_NAME)) {
+                String qualifiedName = getQualifiedName(qName);
+                String metadataName = getMetadataName(list.item(i));
+                if (qualifiedName.equals(metadataName)) {
+                    foundNodes.add(list.item(i));
                 }
+            } else {
+                foundNodes.add(list.item(i));
+            }
+            if (foundNodes.size() == limit) {
+                break;
             }
         }
+        return foundNodes;
+    }
+    
+    /**
+     * Gets the set of values for the given QName.
+     *  
+     * @param qName
+     * @return the values
+     */
+    private String[] getValues(final QName qName) {
+        ArrayList<String> values = new ArrayList<String>();
+        Set<Node> foundNodes = findNodes(qName, -1);
+        for (Node node : foundNodes) {
+            values.add(getNodeValue(node));
+        }
         return values.toArray(new String[values.size()]);
+    }
+    
+    /**
+     * Gets a single value for the given QName.
+     * @param qName
+     * @return the value
+     */
+    private String getValue(final QName qName) {
+        Set<Node> foundNodes = findNodes(qName, 1);
+        if (foundNodes.size() == 1) {
+            return getNodeValue(foundNodes.iterator().next());
+        }
+        return null;
+    }
+    
+    /**
+     * Adds the given value to the given QName's values
+     * 
+     * @param qName
+     * @param value
+     */
+    private void add(final QName qName, final String value) {
+        if (qName == null || value == null) {
+            return;
+        }
+        
+        QName lookupQName = getLookupQName(qName);
+        
+        Element element = metadata.createElementNS(
+                lookupQName.getNamespaceURI(), 
+                getQualifiedName(lookupQName));
+        if (lookupQName.getLocalPart().equals(DOM_NODE_ENTRY_LOCAL_NAME)) {
+            element.setAttributeNS(
+                    DOM_TIKA_NAMESPACE, 
+                    DOM_TIKA_NAMESPACE_PREFIX + NAMESPACE_PREFIX_DELIMITER + DOM_ATTRIBUTE_NAME, 
+                    getQualifiedName(qName));
+        }
+        element.appendChild(metadata.createTextNode(escapeNodeValue(value)));
+        metadata.getFirstChild().appendChild(element);
+    }
+    
+    /**
+     * Sets the given value for the given QName.
+     * 
+     * @param qName
+     * @param value
+     */
+    private void set(QName qName, String value) {
+        remove(qName);
+        if (value != null) {
+            add(qName, value);
+        }
+    }
+    
+    /**
+     * Removes all values for the given QName.
+     * 
+     * @param qName
+     */
+    private void remove(QName qName) {
+        Set<Node> foundNodes = findNodes(qName, -1);
+        for (Node node : foundNodes) {
+            node.getParentNode().removeChild(node);
+        }
     }
     
     /**
@@ -438,14 +643,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      *          the metadata value.
      */
     public void add(final String name, final String value) {
-        if (name == null || value == null) {
-            return;
-        }
-        Element element = metadata.createElement(DOM_NODE_NAME_TOP_LEVEL_ELEMENT);
-        // TODO namespacing
-        element.setAttribute(DOM_ATTRIBUTE_NAME, name);
-        element.appendChild(metadata.createTextNode(escapeNodeValue(value)));
-        metadata.getFirstChild().appendChild(element);
+        add(convertToQName(name), value);
     }
     
     /**
@@ -470,7 +668,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
                         add(secondaryExtractProperty, value);
                     } catch (PropertyTypeException e) {
                         // TODO this is only to mimic current behavior, is it what we want?
-                        set(secondaryExtractProperty.getName(), value);
+                        set(secondaryExtractProperty.getQName(), value);
                     }
                 }
             }
@@ -480,7 +678,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
             {
                 throw new PropertyTypeException(property.getPropertyType());
             }
-            add(property.getName(), value);
+            add(property.getQName(), value);
         }
     }
 
@@ -511,10 +709,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * @param value  the metadata value, or <code>null</code>
      */
     public void set(String name, String value) {
-        remove(name);
-        if (value != null) {
-            add(name, value);
-        }
+        set(convertToQName(name), value);
     }
 
     /**
@@ -536,7 +731,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
                 }
             }
         } else {
-            set(property.getName(), value);
+            set(property.getQName(), value);
         }
     }
     
@@ -649,18 +844,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      *          metadata name to remove
      */
     public void remove(String name) {
-        NodeList list = metadata.getElementsByTagName(DOM_NODE_NAME_TOP_LEVEL_ELEMENT);
-        Set<Node> toRemove = new HashSet<Node>();
-        int found = list.getLength();
-        for (int i = 0; i < found; i++) {
-            Node item = list.item(i);
-            if (name.equals(getAttribute(item, DOM_ATTRIBUTE_NAME))) {
-                toRemove.add(item);
-            }
-        }
-        for (Node node : toRemove) {
-            node.getParentNode().removeChild(node);
-        }
+        remove(convertToQName(name));
     }
 
     /**
@@ -691,8 +875,8 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
 
         String[] names = names();
         for (int i = 0; i < names.length; i++) {
-            String[] otherValues = other._getValues(names[i]);
-            String[] thisValues = _getValues(names[i]);
+            String[] otherValues = other.getValues(names[i]);
+            String[] thisValues = getValues(names[i]);
             if (otherValues.length != thisValues.length) {
                 return false;
             }
@@ -706,45 +890,18 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
     }
 
     public String toString() {
-        Node parent = metadata.getFirstChild();
-        return toString(parent, 0);
+        try {
+            DOMSource domSource = new DOMSource(metadata);
+            StringWriter writer = new StringWriter();
+            StreamResult result = new StreamResult(writer);
+            TransformerFactory tf = TransformerFactory.newInstance();
+            Transformer transformer;
+            transformer = tf.newTransformer();
+            transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+            transformer.transform(domSource, result);
+            return writer.toString();
+        } catch (TransformerException e) {
+            return "Error serializing metadata: " + e.getMessage();
+        }
     }
-    
-    protected String toString(Node node, int indent) {
-        if (node.getNodeType() == Node.TEXT_NODE) {
-            return null;
-        }
-        StringBuffer buf = new StringBuffer("");
-        for (int i = 0; i < indent; i++) {
-            buf.append("\t");
-        }
-        String value = node.getNodeValue();
-        if (value == null) {
-            NodeList children = node.getChildNodes();
-            if (children != null && children.getLength() == 1)
-            {
-                value = children.item(0).getNodeValue();
-            }
-        }
-        buf.append("{")
-                .append("type:" + node.getNodeType())
-                .append(", namespace:" + node.getNamespaceURI())
-                .append(", prefix:" + node.getPrefix())
-                .append(", nodeName:" + node.getNodeName())
-                .append(", name:\"" + getAttribute(node, DOM_ATTRIBUTE_NAME) + "\"")
-                .append(", textValue:\"" + value +"\"")
-                .append("}");
-        if (node.hasChildNodes()) {
-            NodeList list = node.getChildNodes();
-            for (int i=0; i < list.getLength(); i++) {
-                Node child = list.item(i);
-                String nodeOutput = toString(child, indent + 1);
-                if (nodeOutput != null) {
-                    buf.append("\n").append(nodeOutput);
-                }
-            }
-        }
-        return buf.toString();
-    }
-
 }
