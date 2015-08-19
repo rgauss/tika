@@ -19,10 +19,17 @@ package org.apache.tika.metadata;
 //JDK imports
 import java.util.Date;
 import java.util.Properties;
+import java.util.Set;
+
+import javax.xml.namespace.QName;
+import javax.xml.xpath.XPathExpressionException;
 
 import org.apache.tika.utils.DateUtils;
 import org.junit.Test;
 
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.Text;
 
 //Junit imports
 import static org.junit.Assert.assertEquals;
@@ -372,5 +379,76 @@ public class TestMetadata {
        // Fetch as the aliases
        assertEquals(message, meta.get(Metadata.DESCRIPTION));
        assertEquals(message, meta.get("testDescriptionAlt"));
-    }    
+       assertEquals(message, meta.get("dc:description"));
+       
+       meta.add("dc:format", "format1");
+       meta.add("dc:format", "format2");
+       assertEquals("format1", meta.getValues(DublinCore.FORMAT)[0]);
+       assertEquals("format2", meta.getValues(DublinCore.FORMAT)[1]);
+       
+       meta.set( TikaCoreProperties.KEYWORDS, new String[] { "keyword1", "keyword2" } );
+       assertTrue( meta.isMultiValued( TikaCoreProperties.KEYWORDS ) );
+    }
+    
+    @Test
+    public void testQNameStructuredProperty() throws XPathExpressionException {
+        Metadata metadata = new Metadata();
+        
+        // See xcard spec: https://tools.ietf.org/html/rfc6351
+        // We want:
+        //   tel/parameters/type/text=work
+        //   tel/uri=tel:+1-800-555-1234
+        
+        String vcardNamespace = "urn:ietf:params:xml:ns:vcard-4.0";
+        String vcardNamespacePrefix = "vcard";
+        
+        QName vcardTelQName = new QName(vcardNamespace, "tel", vcardNamespacePrefix);
+        
+        Property telProperty = Property.internalDomNode(vcardTelQName);
+        
+        // Set up the DOM structure
+        QName vcardParamQName = new QName(vcardNamespace, "parameters", vcardNamespacePrefix);
+        QName vcardTypeQName = new QName(vcardNamespace, "type", vcardNamespacePrefix);
+        QName vcardTextQName = new QName(vcardNamespace, "text", vcardNamespacePrefix);
+        QName vcardUriQName = new QName(vcardNamespace, "uri", vcardNamespacePrefix);
+        
+        Element vcardTelElement = metadata.createDomElement(vcardTelQName);
+        Element vcardParamElement = metadata.createDomElement(vcardParamQName);
+        Element vcardTypeElement = metadata.createDomElement(vcardTypeQName);
+        Element vcardTextElement = metadata.createDomElement(vcardTextQName);
+        Element vcardUriElement = metadata.createDomElement(vcardUriQName);
+        
+        vcardTelElement.appendChild(vcardParamElement);
+        vcardParamElement.appendChild(vcardTypeElement);
+        vcardTypeElement.appendChild(vcardTextElement);
+        
+        vcardTelElement.appendChild(vcardUriElement);
+        
+        // Set the DOM values
+        String telUri = "tel:+1-800-555-1234";
+        String[] telTypes = new String[] { "work" };
+        
+        for (int i = 0; i < telTypes.length; i++) {
+            Text telType = metadata.createDomText(telTypes[i]);
+            vcardTextElement.appendChild(telType);
+        }
+        
+        Text telNumber = metadata.createDomText(telUri);
+        vcardUriElement.appendChild(telNumber);
+        
+        // Add to the metadata store
+        metadata.add(telProperty, vcardTelElement);
+        
+        // Get the full node object programmatically
+        Set<Node> nodes = metadata.getDomNodes(telProperty);
+        assertEquals(1, nodes.size());
+        
+        // Our URI value is a child text node
+        assertEquals(telUri, nodes.iterator().next().getChildNodes().item(1).getChildNodes().item(0).getNodeValue());
+        
+        // Alternatively use XPath to retrieve a value
+        String expression = "/tika:metadata/vcard:tel[1]/vcard:uri";
+        assertEquals(telUri, metadata.getValueByXPath(expression));
+        
+    }
 }

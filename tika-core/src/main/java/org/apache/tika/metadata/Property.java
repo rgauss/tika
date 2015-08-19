@@ -54,7 +54,7 @@ public final class Property implements Comparable<Property> {
 
     public static enum ValueType {
         BOOLEAN, OPEN_CHOICE, CLOSED_CHOICE, DATE, INTEGER, LOCALE,
-        MIME_TYPE, PROPER_NAME, RATIONAL, REAL, TEXT, URI, URL, XPATH, PROPERTY
+        MIME_TYPE, PROPER_NAME, RATIONAL, REAL, TEXT, URI, URL, XPATH, PROPERTY, DOM_ELEMENT
     }
 
     private static final Map<QName, Property> properties =
@@ -373,6 +373,10 @@ public final class Property implements Comparable<Property> {
 
     public static Property internalURI(String name) {
         return new Property(name, true, ValueType.URI);
+    }
+
+    public static Property internalDomNode(QName qName) {
+        return new Property(qName, true, ValueType.DOM_ELEMENT);
     }
 
     public static Property externalClosedChoise(

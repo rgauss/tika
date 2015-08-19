@@ -30,13 +30,17 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.TimeZone;
 
 import javax.xml.XMLConstants;
+import javax.xml.namespace.NamespaceContext;
 import javax.xml.namespace.QName;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -47,6 +51,9 @@ import javax.xml.transform.TransformerException;
 import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
+import javax.xml.xpath.XPath;
+import javax.xml.xpath.XPathExpressionException;
+import javax.xml.xpath.XPathFactory;
 
 import org.apache.commons.lang.StringEscapeUtils;
 import org.apache.tika.metadata.Property.PropertyType;
@@ -54,6 +61,7 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
+import org.w3c.dom.Text;
 
 /**
  * A multi-valued metadata container.
@@ -69,6 +77,16 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * A map of all metadata attributes.
      */
     private Document metadata = null;
+    
+    /**
+     * An XPath object for querying metadata
+     */
+    private transient XPath xPath;
+
+    /**
+     * A namespace context or registry
+     */
+    private NamespaceContextImpl namespaceContext;
 
     /**
      * The common delimiter used between the namespace abbreviation and the property name
@@ -202,6 +220,11 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
         try {
             DocumentBuilderFactory documentBuilderFactory = DocumentBuilderFactory.newInstance();
             DocumentBuilder documentBuilder = documentBuilderFactory.newDocumentBuilder();
+            xPath =  XPathFactory.newInstance().newXPath();
+            namespaceContext = new NamespaceContextImpl();
+            namespaceContext.register(DOM_TIKA_NAMESPACE_PREFIX, DOM_TIKA_NAMESPACE);
+            xPath.setNamespaceContext(namespaceContext);
+            
             metadata = documentBuilder.newDocument();
             Node rootNode = metadata.createElementNS(
                     DOM_TIKA_NAMESPACE, 
@@ -210,6 +233,26 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
         } catch (ParserConfigurationException e) {
             throw new RuntimeException("Could not instantiate metadata store", e);
         }
+    }
+
+    /**
+     * Creates a DOM element node from the underlying metadata store
+     * 
+     * @param qName
+     * @return the DOM element node
+     */
+    public Element createDomElement(QName qName) {
+        return metadata.createElementNS(qName.getNamespaceURI(), getQualifiedName(qName));
+    }
+
+    /**
+     * Creates a DOM text node from the underlying metadata store
+     * 
+     * @param value
+     * @return the DOM text node
+     */
+    public Text createDomText(String value) {
+        return metadata.createTextNode(escapeNodeValue(value));
     }
 
     /**
@@ -340,7 +383,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * @param value
      * @return the escaped value
      */
-    protected String escapeNodeValue(String value) {
+    protected static String escapeNodeValue(String value) {
         if (value == null) {
             return null;
         }
@@ -353,7 +396,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * @param value
      * @return the unescpaed value
      */
-    protected String unescapeNodeValue(String value) {
+    protected static String unescapeNodeValue(String value) {
         if (value == null) {
             return null;
         }
@@ -366,7 +409,7 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
      * @param node
      * @return the attribute value
      */
-    protected String getMetadataName(Node node) {
+    protected static String getMetadataName(Node node) {
         if (node == null) {
             return null;
         }
@@ -479,7 +522,46 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
     public String[] getValues(final String name) {
         return getValues(convertToQName(name));
     }
-    
+
+    /**
+     * Gets or creates the XPath object
+     * 
+     * @return the XPath object
+     */
+    protected XPath getXPath() {
+        if (xPath == null) {
+            xPath = XPathFactory.newInstance().newXPath();
+        }
+        return xPath;
+    }
+
+    /**
+     * Gets the metadata String value from the given XPath expression
+     * 
+     * @param expression
+     * @return the string value
+     * @throws XPathExpressionException
+     */
+    public String getValueByXPath(final String expression) throws XPathExpressionException {
+        if (expression == null) {
+            return null;
+        }
+        return getXPath().compile(expression).evaluate(metadata);
+    }
+
+    /**
+     * Gets the metadata DOM nodes for the given preoperty
+     * 
+     * @param property
+     * @return the found DOM nodes
+     */
+    public Set<Node> getDomNodes(final Property property) {
+        if (property == null) {
+            return null;
+        }
+        return findNodes(property.getQName(), -1);
+    }
+
     /**
      * Converts the given QName into an appropriate QName
      * that may be contained in the metadata store.
@@ -595,6 +677,12 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
         
         QName lookupQName = getLookupQName(qName);
         
+        // Register any namespace added
+        if (lookupQName.getPrefix() != XMLConstants.DEFAULT_NS_PREFIX 
+                && lookupQName.getNamespaceURI() != XMLConstants.NULL_NS_URI) {
+            namespaceContext.register(lookupQName.getPrefix(), lookupQName.getNamespaceURI());
+        }
+        
         Element element = metadata.createElementNS(
                 lookupQName.getNamespaceURI(), 
                 getQualifiedName(lookupQName));
@@ -680,6 +768,26 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
             }
             add(property.getQName(), value);
         }
+    }
+
+    /**
+     * Adds the given DOM element value for the given property to the metadata
+     * store
+     * 
+     * @param property
+     * @param value
+     */
+    public void add(final Property property, final Element value) {
+        if (property == null || property.getQName() == null || value == null)
+        {
+            return;
+        }
+        // TODO throw type exception on null QName?
+        if (property.getQName().getPrefix() != XMLConstants.DEFAULT_NS_PREFIX 
+                && property.getQName().getNamespaceURI() != XMLConstants.NULL_NS_URI) {
+            namespaceContext.register(property.getQName().getPrefix(), property.getQName().getNamespaceURI());
+        }
+        metadata.getFirstChild().appendChild(value);
     }
 
     /**
@@ -898,10 +1006,40 @@ public class Metadata implements CreativeCommons, Geographic, HttpHeaders,
             Transformer transformer;
             transformer = tf.newTransformer();
             transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+            transformer.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
             transformer.transform(domSource, result);
             return writer.toString();
         } catch (TransformerException e) {
             return "Error serializing metadata: " + e.getMessage();
+        }
+    }
+    
+    /**
+     * Class for maintaining a namespace registry
+     */
+    protected class NamespaceContextImpl implements NamespaceContext, Serializable {
+        
+        private static final long serialVersionUID = -8304252584743304759L;
+        
+        private Map<String, String> namespaceRegistry = new HashMap<String, String>();
+        
+        @Override
+        public String getNamespaceURI(String prefix) {
+            return namespaceRegistry.get(prefix);
+        }
+
+        @Override
+        public String getPrefix(String namespaceURI) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Iterator<?> getPrefixes(String namespaceURI) {
+            throw new UnsupportedOperationException();
+        }
+        
+        protected void register(String prefix, String namespaceUri) {
+            namespaceRegistry.put(prefix, namespaceUri);
         }
     }
 }
