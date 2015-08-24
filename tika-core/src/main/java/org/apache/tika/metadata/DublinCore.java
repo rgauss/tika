@@ -16,6 +16,8 @@
  */
 package org.apache.tika.metadata;
 
+import javax.xml.namespace.QName;
+
 /**
  * A collection of Dublin Core metadata names.
  *
@@ -36,8 +38,9 @@ public interface DublinCore {
      * to select a value from a controlled vocabulary (for example, the list
      * of Internet Media Types [MIME] defining computer media formats).
      */
-	Property FORMAT = Property.internalText(
-    		PREFIX_DC + Metadata.NAMESPACE_PREFIX_DELIMITER + "format");
+    // TODO this isn't multivalued, but PDFParser seems to rely on it as such
+    Property FORMAT = Property.internalTextBag(
+            new QName(NAMESPACE_URI_DC, "format", PREFIX_DC));
 
     /**
      * Recommended best practice is to identify the resource by means of
@@ -47,14 +50,14 @@ public interface DublinCore {
      * the Digital Object Identifier (DOI) and the International Standard
      * Book Number (ISBN).
      */
-	Property IDENTIFIER = Property.internalText(
-    		PREFIX_DC + Metadata.NAMESPACE_PREFIX_DELIMITER + "identifier");
+    Property IDENTIFIER = Property.internalText(
+            new QName(NAMESPACE_URI_DC, "identifier", PREFIX_DC));
 
     /**
      * Date on which the resource was changed.
      */
-	Property MODIFIED = Property.internalDate(
-		PREFIX_DC_TERMS + Metadata.NAMESPACE_PREFIX_DELIMITER + "modified");
+    Property MODIFIED = Property.internalDate(
+            new QName(NAMESPACE_URI_DC_TERMS, "modified", PREFIX_DC_TERMS));
 
     /**
      * An entity responsible for making contributions to the content of the
@@ -62,8 +65,8 @@ public interface DublinCore {
      * or a service. Typically, the name of a Contributor should be used to
      * indicate the entity.
      */
-	Property CONTRIBUTOR = Property.internalTextBag(
-    		PREFIX_DC + Metadata.NAMESPACE_PREFIX_DELIMITER + "contributor");
+    Property CONTRIBUTOR = Property.internalTextBag(
+            new QName(NAMESPACE_URI_DC, "contributor", PREFIX_DC));
 
     /**
      * The extent or scope of the content of the resource. Coverage will
@@ -75,22 +78,22 @@ public interface DublinCore {
      * appropriate, named places or time periods be used in preference to
      * numeric identifiers such as sets of coordinates or date ranges.
      */
-	Property COVERAGE = Property.internalText(
-    		PREFIX_DC + Metadata.NAMESPACE_PREFIX_DELIMITER + "coverage");
+    Property COVERAGE = Property.internalText(
+            new QName(NAMESPACE_URI_DC, "coverage", PREFIX_DC));
 
     /**
      * An entity primarily responsible for making the content of the resource.
      * Examples of a Creator include a person, an organisation, or a service.
      * Typically, the name of a Creator should be used to indicate the entity.
      */
-	Property CREATOR = Property.internalTextBag(
-    		PREFIX_DC + Metadata.NAMESPACE_PREFIX_DELIMITER + "creator");
+    Property CREATOR = Property.internalTextBag(
+            new QName(NAMESPACE_URI_DC, "creator", PREFIX_DC));
 
     /**
      * Date of creation of the resource.
      */
-        Property CREATED = Property.internalDate(
-                PREFIX_DC_TERMS + Metadata.NAMESPACE_PREFIX_DELIMITER + "created");
+    Property CREATED = Property.internalDate(
+            new QName(NAMESPACE_URI_DC_TERMS, "created", PREFIX_DC_TERMS));
 
     /**
      * A date associated with an event in the life cycle of the resource.
@@ -99,8 +102,8 @@ public interface DublinCore {
      * defined in a profile of ISO 8601 [W3CDTF] and follows the YYYY-MM-DD
      * format.
      */
-	Property DATE = Property.internalDate(
-    		PREFIX_DC + Metadata.NAMESPACE_PREFIX_DELIMITER + "date");
+    Property DATE = Property.internalDate(
+            new QName(NAMESPACE_URI_DC, "date", PREFIX_DC));
 
     /**
      * An account of the content of the resource. Description may include
@@ -108,8 +111,8 @@ public interface DublinCore {
      * a graphical representation of content or a free-text account of
      * the content.
      */
-	Property DESCRIPTION = Property.internalText(
-    		PREFIX_DC + Metadata.NAMESPACE_PREFIX_DELIMITER + "description");
+    Property DESCRIPTION = Property.internalText(
+            new QName(NAMESPACE_URI_DC, "description", PREFIX_DC));
 
     /**
      * A language of the intellectual content of the resource. Recommended
@@ -118,24 +121,24 @@ public interface DublinCore {
      * tags with optional subtags. Examples include "en" or "eng" for English,
      * "akk" for Akkadian, and "en-GB" for English used in the United Kingdom.
      */
-	Property LANGUAGE = Property.internalText(
-    		PREFIX_DC + Metadata.NAMESPACE_PREFIX_DELIMITER + "language");
+    Property LANGUAGE = Property.internalText(
+            new QName(NAMESPACE_URI_DC, "language", PREFIX_DC));
 
     /**
      * An entity responsible for making the resource available. Examples of
      * a Publisher include a person, an organisation, or a service. Typically,
      * the name of a Publisher should be used to indicate the entity.
      */
-	Property PUBLISHER = Property.internalText(
-    		PREFIX_DC + Metadata.NAMESPACE_PREFIX_DELIMITER + "publisher");
+    Property PUBLISHER = Property.internalText(
+            new QName(NAMESPACE_URI_DC, "publisher", PREFIX_DC));
 
     /**
      * A reference to a related resource. Recommended best practice is to
      * reference the resource by means of a string or number conforming to
      * a formal identification system.
      */
-	Property RELATION = Property.internalText(
-    		PREFIX_DC + Metadata.NAMESPACE_PREFIX_DELIMITER + "relation");
+    Property RELATION = Property.internalText(
+            new QName(NAMESPACE_URI_DC, "relation", PREFIX_DC));
 
     /**
      * Information about rights held in and over the resource. Typically,
@@ -146,8 +149,8 @@ public interface DublinCore {
      * is absent, no assumptions can be made about the status of these and
      * other rights with respect to the resource.
      */
-	Property RIGHTS = Property.internalText(
-    		PREFIX_DC + Metadata.NAMESPACE_PREFIX_DELIMITER + "rights");
+    Property RIGHTS = Property.internalText(
+            new QName(NAMESPACE_URI_DC, "rights", PREFIX_DC));
 
     /**
      * A reference to a resource from which the present resource is derived.
@@ -156,8 +159,8 @@ public interface DublinCore {
      * means of a string or number conforming to a formal identification
      * system.
      */
-	Property SOURCE = Property.internalText(
-    		PREFIX_DC + Metadata.NAMESPACE_PREFIX_DELIMITER + "source");
+    Property SOURCE = Property.internalText(
+            new QName(NAMESPACE_URI_DC, "source", PREFIX_DC));
 
     /**
      * The topic of the content of the resource. Typically, a Subject will
@@ -166,15 +169,15 @@ public interface DublinCore {
      * select a value from a controlled vocabulary or formal classification
      * scheme.
      */
-	Property SUBJECT = Property.internalTextBag(
-    		PREFIX_DC + Metadata.NAMESPACE_PREFIX_DELIMITER + "subject");
+    Property SUBJECT = Property.internalTextBag(
+            new QName(NAMESPACE_URI_DC, "subject", PREFIX_DC));
 
     /**
      * A name given to the resource. Typically, a Title will be a name by
      * which the resource is formally known.
      */
-	Property TITLE = Property.internalText(
-    		PREFIX_DC + Metadata.NAMESPACE_PREFIX_DELIMITER + "title");
+    Property TITLE = Property.internalText(
+            new QName(NAMESPACE_URI_DC, "title", PREFIX_DC));
 
     /**
      * The nature or genre of the content of the resource. Type includes terms
@@ -184,7 +187,7 @@ public interface DublinCore {
      * [DCMITYPE]). To describe the physical or digital manifestation of
      * the resource, use the Format element.
      */
-	Property TYPE = Property.internalText(
-    		PREFIX_DC + Metadata.NAMESPACE_PREFIX_DELIMITER + "type");
+    Property TYPE = Property.internalText(
+            new QName(NAMESPACE_URI_DC, "type", PREFIX_DC));
 
 }
